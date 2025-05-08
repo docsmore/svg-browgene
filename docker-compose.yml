@@ -1,5 +1,6 @@
 services:
   browser-use-webui:
+    image: solvgene/svg-browgene:1.0.0-amd64
     platform: linux/amd64
     build:
       context: .
