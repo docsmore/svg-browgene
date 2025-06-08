@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SVG-Browgene Screenshot Viewer</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            line-height: 1.6;
+        }
+        h1 {
+            color: #333;
+            border-bottom: 1px solid #eee;
+            padding-bottom: 10px;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        input[type="text"] {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 10px 15px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        .screenshots-container {
+            margin-top: 20px;
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
+            gap: 20px;
+        }
+        .screenshot-card {
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        }
+        .screenshot-img {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+        .screenshot-info {
+            padding: 15px;
+            background-color: #f9f9f9;
+        }
+        .screenshot-info h3 {
+            margin-top: 0;
+            color: #333;
+        }
+        .status {
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+        .loading {
+            text-align: center;
+            padding: 20px;
+            font-size: 18px;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <h1>SVG-Browgene Screenshot Viewer</h1>
+    
+    <div class="form-group">
+        <label for="task-id">Task ID:</label>
+        <input type="text" id="task-id" placeholder="Enter task ID">
+    </div>
+    
+    <button id="load-screenshots-btn">Load Screenshots</button>
+    
+    <div id="status" class="status"></div>
+    
+    <div id="screenshots-container" class="screenshots-container"></div>
+    
+    <script>
+        // API endpoint configuration
+        const API_CONFIG = {
+            BASE_URL: 'http://localhost:7793',
+            ENDPOINTS: {
+                TASK_STATUS: '/api/browgene/task_status'
+            },
+            DEFAULT_HEADERS: {
+                'Content-Type': 'application/json'
+            }
+        };
+
+        // Load screenshots button
+        document.getElementById('load-screenshots-btn').addEventListener('click', async () => {
+            const taskId = document.getElementById('task-id').value.trim();
+            
+            if (!taskId) {
+                document.getElementById('status').textContent = 'Please enter a task ID';
+                return;
+            }
+            
+            const statusElement = document.getElementById('status');
+            const screenshotsContainer = document.getElementById('screenshots-container');
+            
+            statusElement.textContent = 'Loading screenshots...';
+            screenshotsContainer.innerHTML = '<div class="loading">Loading...</div>';
+            
+            try {
+                const response = await fetch(`${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.TASK_STATUS}/${taskId}`, {
+                    method: 'GET',
+                    headers: API_CONFIG.DEFAULT_HEADERS
+                });
+                
+                const data = await response.json();
+                
+                if (!response.ok) {
+                    throw new Error(`Error: ${data.detail || 'Failed to load task data'}`);
+                }
+                
+                statusElement.textContent = `Task Status: ${data.metadata.status}`;
+                screenshotsContainer.innerHTML = '';
+                
+                if (data.screenshots && data.screenshots.length > 0) {
+                    data.screenshots.forEach((screenshot, index) => {
+                        const card = document.createElement('div');
+                        card.className = 'screenshot-card';
+                        
+                        const img = document.createElement('img');
+                        img.src = `data:image/png;base64,${screenshot}`;
+                        img.alt = `Screenshot ${index + 1}`;
+                        img.className = 'screenshot-img';
+                        
+                        const info = document.createElement('div');
+                        info.className = 'screenshot-info';
+                        
+                        const title = document.createElement('h3');
+                        title.textContent = `Screenshot ${index + 1}`;
+                        
+                        info.appendChild(title);
+                        
+                        if (data.interactions && data.interactions[index]) {
+                            const action = document.createElement('p');
+                            action.textContent = `Action: ${data.interactions[index].action}`;
+                            info.appendChild(action);
+                        }
+                        
+                        card.appendChild(img);
+                        card.appendChild(info);
+                        screenshotsContainer.appendChild(card);
+                    });
+                } else {
+                    screenshotsContainer.innerHTML = '<p>No screenshots available for this task</p>';
+                }
+                
+            } catch (error) {
+                statusElement.textContent = 'Error loading screenshots';
+                screenshotsContainer.innerHTML = `<p class="error">${error.message}</p>`;
+            }
+        });
+    </script>
+</body>
+</html>

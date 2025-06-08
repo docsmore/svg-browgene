@@ -1,0 +1,508 @@
+#!/usr/bin/env python3
+"""
+API Server for SVG-Browgene
+
+This script creates a FastAPI server that exposes the SVG-Browgene functionality
+as REST API endpoints, making it easy to integrate with other applications.
+"""
+
+import os
+import json
+import asyncio
+import logging
+from typing import Dict, Any, Optional, List
+from pydantic import BaseModel, Field
+from fastapi import FastAPI, BackgroundTasks, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from dotenv import load_dotenv
+import uvicorn
+
+# Import SVG-Browgene components
+from langchain_openai import ChatOpenAI
+from browser_use.browser.browser import Browser, BrowserConfig
+from browser_use.browser.context import BrowserContextConfig, BrowserContextWindowSize
+from src.agent.custom_agent import CustomAgent
+from src.browser.custom_browser import CustomBrowser
+from playwright.async_api import async_playwright
+
+# Create a utils module for helper functions
+class utils:
+    @staticmethod
+    def get_current_time_iso():
+        from datetime import datetime
+        return datetime.now().isoformat()
+        
+    @staticmethod
+    def get_llm_model(provider, model_name, num_ctx=4096, temperature=0.7, base_url=None, api_key=None):
+        if provider == "openai":
+            from langchain_openai import ChatOpenAI
+            return ChatOpenAI(
+                model_name=model_name,
+                temperature=temperature,
+                openai_api_key=api_key,
+                openai_api_base=base_url
+            )
+        elif provider == "anthropic":
+            from langchain_anthropic import ChatAnthropic
+            return ChatAnthropic(
+                model_name=model_name,
+                temperature=temperature,
+                anthropic_api_key=api_key
+            )
+        else:
+            raise ValueError(f"Unsupported LLM provider: {provider}")
+
+
+# Load environment variables
+load_dotenv()
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Create FastAPI app
+app = FastAPI(
+    title="SVG-Browgene API",
+    description="API for browser automation with AI agents using LLMs and Playwright.",
+    version="1.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc",
+    openapi_url="/openapi.json"
+)
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows all origins
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows all methods
+    allow_headers=["*"],  # Allows all headers
+)
+
+# Define request models
+class BrowserOptions(BaseModel):
+    """Browser launch options for Playwright"""
+    ignoreDefaultArgs: Optional[List[str]] = Field(
+        default_factory=list,
+        description="List of default browser arguments to ignore"
+    )
+    args: Optional[List[str]] = Field(
+        default_factory=list,
+        description="Additional browser arguments to pass to Playwright"
+    )
+
+class TaskRequest(BaseModel):
+    """Request model for running a browser automation task"""
+    task: str = Field(
+        ...,
+        description="The task description for the AI agent to perform"
+    )
+    agent_type: str = Field(
+        "org",
+        description="Type of agent to use (currently only 'org' is supported)"
+    )
+    llm_provider: str = Field(
+        "openai",
+        description="LLM provider to use (openai, anthropic, etc.)"
+    )
+    llm_model_name: str = Field(
+        "gpt-4o",
+        description="Model name to use for the LLM"
+    )
+    llm_num_ctx: int = Field(
+        4096,
+        description="Context window size for the LLM"
+    )
+    llm_temperature: float = Field(
+        0.7,
+        description="Temperature parameter for the LLM (0.0-1.0)"
+    )
+    llm_base_url: Optional[str] = Field(
+        None,
+        description="Base URL for the LLM API (optional)"
+    )
+    llm_api_key: Optional[str] = Field(
+        None,
+        description="API key for the LLM provider (optional, will use env var if not provided)"
+    )
+    use_own_browser: bool = Field(
+        False,
+        description="Whether to use an existing browser instance (not recommended)"
+    )
+    keep_browser_open: bool = Field(
+        True,
+        description="Whether to keep the browser open after the task completes"
+    )
+    headless: bool = Field(
+        True,
+        description="Whether to run the browser in headless mode"
+    )
+    disable_security: bool = Field(
+        False,
+        description="Whether to disable browser security features (not recommended)"
+    )
+    window_w: int = Field(
+        1280,
+        description="Browser window width in pixels"
+    )
+    window_h: int = Field(
+        720,
+        description="Browser window height in pixels"
+    )
+    save_recording_path: str = Field(
+        "/tmp/recordings",
+        description="Path to save browser recordings"
+    )
+    save_agent_history_path: str = Field(
+        "/tmp/history",
+        description="Path to save agent history files"
+    )
+    save_trace_path: str = Field(
+        "/tmp/traces",
+        description="Path to save browser traces"
+    )
+    enable_recording: bool = Field(
+        False,
+        description="Whether to record the browser session as a GIF"
+    )
+    max_steps: int = Field(
+        50,
+        description="Maximum number of steps the agent can take"
+    )
+    use_vision: bool = Field(
+        True,
+        description="Whether to use vision capabilities of the LLM"
+    )
+    max_actions_per_step: int = Field(
+        10,
+        description="Maximum number of actions per step"
+    )
+    tool_calling_method: str = Field(
+        "function_calling",
+        description="Method to use for tool calling (function_calling or json)"
+    )
+    add_infos: Optional[str] = Field(
+        None,
+        description="Additional information as JSON string (e.g., browser_options)"
+    )
+
+# Define response models
+class TaskResponse(BaseModel):
+    """Response model for browser automation tasks"""
+    success: bool = Field(
+        ...,
+        description="Whether the task was successful"
+    )
+    extracted_text: str = Field(
+        "",
+        description="Text extracted from the task execution"
+    )
+    interactions: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="List of agent interactions with the browser"
+    )
+    agent_brain: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Agent's internal state and reasoning"
+    )
+    history_file: Optional[str] = Field(
+        None,
+        description="Path to the saved history file"
+    )
+    error: Optional[str] = Field(
+        None,
+        description="Error message if the task failed"
+    )
+    metadata: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Additional metadata about the task execution"
+    )
+
+# Store active tasks
+active_tasks = {}
+
+@app.get("/", summary="API Health Check", 
+       description="Check if the API server is running properly")
+async def root():
+    """Returns the status of the API server.
+    
+    Returns:
+        dict: A message indicating the server is running
+    """
+    return {"message": "SVG-Browgene API Server", "status": "running"}
+
+@app.post("/api/browgene/run_task", response_model=TaskResponse,
+        summary="Run Browser Automation Task",
+        description="Start a new browser automation task with the specified parameters")
+async def run_task(request: TaskRequest, background_tasks: BackgroundTasks):
+    """
+    Run a browser automation task using AI agents and Playwright.
+    
+    The task will be executed asynchronously in the background. The response will
+    contain a task ID that can be used to check the status of the task.
+    
+    Args:
+        request: The task request parameters
+        background_tasks: FastAPI background tasks handler
+        
+    Returns:
+        TaskResponse: Initial response with task ID and status
+    """
+    
+    task_id = f"task_{len(active_tasks) + 1}"
+    
+    # Parse browser options if provided
+    browser_options = {}
+    if request.add_infos:
+        try:
+            add_infos_dict = json.loads(request.add_infos)
+            if "browser_options" in add_infos_dict:
+                browser_options = add_infos_dict["browser_options"]
+        except json.JSONDecodeError:
+            logger.warning("Failed to parse add_infos as JSON")
+    
+    # Initialize response
+    response = TaskResponse(
+        success=False,
+        metadata={
+            "task_id": task_id,
+            "task": request.task,
+            "agent_type": request.agent_type,
+            "llm_provider": request.llm_provider,
+            "llm_model_name": request.llm_model_name
+        }
+    )
+    
+    try:
+        # Check if OpenAI API key is set
+        api_key = request.llm_api_key or os.getenv("OPENAI_API_KEY")
+        if not api_key and request.llm_provider == "openai":
+            raise ValueError("OpenAI API key not found")
+        
+        # Initialize LLM
+        llm = utils.get_llm_model(
+            provider=request.llm_provider,
+            model_name=request.llm_model_name,
+            num_ctx=request.llm_num_ctx,
+            temperature=request.llm_temperature,
+            base_url=request.llm_base_url,
+            api_key=api_key
+        )
+        
+        # Start task execution in background
+        background_tasks.add_task(
+            execute_task,
+            task_id=task_id,
+            request=request,
+            llm=llm,
+            browser_options=browser_options
+        )
+        
+        # Return initial response
+        response.success = True
+        response.metadata["status"] = "started"
+        
+        return response
+        
+    except Exception as e:
+        logger.error(f"Error starting task: {e}")
+        response.error = str(e)
+        return response
+
+@app.get("/api/browgene/task_status/{task_id}", response_model=TaskResponse,
+       summary="Get Task Status",
+       description="Check the current status of a previously started task")
+async def get_task_status(task_id: str):
+    """
+    Get the status of a running task.
+    
+    This endpoint allows you to check the current status of a task that was
+    previously started using the run_task endpoint. The response will contain
+    the current status of the task, as well as any results if the task has completed.
+    
+    Args:
+        task_id: The ID of the task to check
+        
+    Returns:
+        TaskResponse: Current status and results of the task
+        
+    Raises:
+        HTTPException: If the task ID is not found
+    """
+    if task_id not in active_tasks:
+        raise HTTPException(status_code=404, detail="Task not found")
+    
+    return active_tasks[task_id]
+
+async def execute_task(task_id: str, request: TaskRequest, llm: Any, browser_options: Dict[str, Any]):
+    """
+    Execute a browser automation task
+    """
+    # Initialize response
+    response = TaskResponse(
+        success=False,
+        metadata={
+            "task_id": task_id,
+            "task": request.task,
+            "status": "running",
+            "start_time": utils.get_current_time_iso()
+        }
+    )
+    
+    # Store in active tasks
+    active_tasks[task_id] = response
+    
+    try:
+        # Initialize playwright and browser
+        playwright = await async_playwright().start()
+        
+        # Configure browser launch options
+        browser_args = browser_options.get("args", [])
+        ignore_default_args = browser_options.get("ignoreDefaultArgs", [])
+        
+        browser_instance = await playwright.chromium.launch(
+            headless=request.headless,
+            args=browser_args,
+            ignore_default_args=ignore_default_args
+        )
+        
+        # Create browser with proper configuration
+        browser = Browser(
+            config=BrowserConfig(
+                disable_security=request.disable_security,
+                headless=request.headless
+            )
+        )
+        
+        # Create window size configuration
+        window_size = {
+            "width": request.window_w,
+            "height": request.window_h
+        }
+        
+        # Create directories if they don't exist
+        os.makedirs(request.save_recording_path, exist_ok=True)
+        os.makedirs(request.save_agent_history_path, exist_ok=True)
+        os.makedirs(request.save_trace_path, exist_ok=True)
+        
+        # Create browser context with proper configuration
+        browser_context = await browser.new_context(
+            config=BrowserContextConfig(
+                trace_path=request.save_trace_path if request.save_trace_path else None,
+                save_recording_path=request.save_recording_path if request.enable_recording else None,
+                no_viewport=False,
+                browser_window_size=BrowserContextWindowSize(
+                    width=request.window_w, 
+                    height=request.window_h
+                )
+            )
+        )
+        
+        # Initialize agent based on agent type
+        if request.agent_type == "org":
+            from src.agent.custom_agent import CustomAgent
+            # Prepare agent parameters
+            agent_params = {
+                "task": request.task,
+                "llm": llm,
+                "browser": browser,
+                "browser_context": browser_context,
+                "use_vision": request.use_vision,
+                "max_actions_per_step": request.max_actions_per_step
+            }
+            
+            # Add optional parameters
+            if request.enable_recording:
+                agent_params["generate_gif"] = True
+                agent_params["save_recording_path"] = request.save_recording_path
+            
+            if request.save_agent_history_path:
+                agent_params["save_agent_history_path"] = request.save_agent_history_path
+                
+            if request.save_trace_path:
+                agent_params["save_trace_path"] = request.save_trace_path
+                
+            # Create agent with filtered parameters
+            agent = CustomAgent(**agent_params)
+        else:
+            # Default to custom agent
+            from src.agent.custom_agent import CustomAgent
+            # Prepare agent parameters (same as above)
+            agent_params = {
+                "task": request.task,
+                "llm": llm,
+                "browser": browser,
+                "browser_context": browser_context,
+                "use_vision": request.use_vision,
+                "max_actions_per_step": request.max_actions_per_step
+            }
+            
+            # Add optional parameters
+            if request.enable_recording:
+                agent_params["generate_gif"] = True
+                agent_params["save_recording_path"] = request.save_recording_path
+            
+            if request.save_agent_history_path:
+                agent_params["save_agent_history_path"] = request.save_agent_history_path
+                
+            if request.save_trace_path:
+                agent_params["save_trace_path"] = request.save_trace_path
+                
+            # Create agent with filtered parameters
+            agent = CustomAgent(**agent_params)
+        
+        # Run the agent with max_steps parameter
+        output = await agent.run(max_steps=request.max_steps)
+        
+        # Update response
+        response.success = True
+        response.extracted_text = output or ""
+        
+        # Get agent history if available
+        if hasattr(agent, "history") and agent.history:
+            response.interactions = [
+                {"action": step.action, "result": step.result}
+                for step in agent.history
+            ]
+        
+        # Get agent brain if available
+        if hasattr(agent, "brain") and agent.brain:
+            response.agent_brain = agent.brain
+        
+        # Get history file if available
+        if hasattr(agent, "history_file") and agent.history_file:
+            response.history_file = agent.history_file
+        
+        # Update metadata
+        response.metadata["status"] = "completed"
+        response.metadata["end_time"] = utils.get_current_time_iso()
+        
+    except Exception as e:
+        logger.error(f"Error executing task: {e}")
+        response.error = str(e)
+        response.metadata["status"] = "failed"
+        response.metadata["end_time"] = utils.get_current_time_iso()
+    finally:
+        # Clean up
+        try:
+            if 'browser' in locals():
+                await browser.close()
+            if 'playwright' in locals():
+                await playwright.stop()
+        except Exception as e:
+            logger.error(f"Error during cleanup: {e}")
+        
+        # Update active tasks
+        active_tasks[task_id] = response
+
+def start_server():
+    """Start the API server"""
+    uvicorn.run(
+        "api_server:app",
+        host="0.0.0.0",
+        port=7793,
+        reload=True
+    )
+
+if __name__ == "__main__":
+    start_server()

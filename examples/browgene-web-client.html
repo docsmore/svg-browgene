@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SVG-Browgene API Client Demo</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            line-height: 1.6;
+        }
+        h1 {
+            color: #333;
+            border-bottom: 1px solid #eee;
+            padding-bottom: 10px;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        input[type="text"], textarea, select {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 10px 15px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        .result {
+            margin-top: 20px;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            background-color: #f9f9f9;
+        }
+        .status {
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+        .error {
+            color: #d32f2f;
+            background-color: #ffebee;
+            padding: 10px;
+            border-radius: 4px;
+            margin-top: 10px;
+        }
+        pre {
+            background-color: #f5f5f5;
+            padding: 10px;
+            border-radius: 4px;
+            overflow-x: auto;
+        }
+        .tabs {
+            display: flex;
+            border-bottom: 1px solid #ddd;
+            margin-bottom: 20px;
+        }
+        .tab {
+            padding: 10px 20px;
+            cursor: pointer;
+            background-color: #f1f1f1;
+            margin-right: 5px;
+            border-radius: 4px 4px 0 0;
+        }
+        .tab.active {
+            background-color: #4CAF50;
+            color: white;
+        }
+        .tab-content {
+            display: none;
+        }
+        .tab-content.active {
+            display: block;
+        }
+        .screenshots-container {
+            margin-top: 20px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+        .screenshot {
+            max-width: 100%;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+    </style>
+</head>
+<body>
+    <h1>SVG-Browgene API Client Demo</h1>
+    
+    <div class="tabs">
+        <div class="tab active" data-tab="run-task">Run Task</div>
+        <div class="tab" data-tab="check-status">Check Status</div>
+    </div>
+    
+    <div id="run-task" class="tab-content active">
+        <h2>Run Browser Automation Task</h2>
+        
+        <div class="form-group">
+            <label for="task">Task Description:</label>
+            <textarea id="task" rows="3" placeholder="E.g., Go to cnn.com and get the top headline">Go to cnn.com and get the top headline</textarea>
+        </div>
+        
+        <div class="form-group">
+            <label for="agent-type">Agent Type:</label>
+            <select id="agent-type">
+                <option value="org" selected>org</option>
+                <option value="custom">custom</option>
+            </select>
+        </div>
+        
+        <div class="form-group">
+            <label for="llm-provider">LLM Provider:</label>
+            <select id="llm-provider">
+                <option value="openai" selected>OpenAI</option>
+                <option value="anthropic">Anthropic</option>
+            </select>
+        </div>
+        
+        <div class="form-group">
+            <label for="llm-model">LLM Model:</label>
+            <input type="text" id="llm-model" value="gpt-4o">
+        </div>
+        
+        <div class="form-group">
+            <label for="api-key">API Key:</label>
+            <input type="text" id="api-key" placeholder="Your LLM API Key">
+        </div>
+        
+        <div class="form-group">
+            <label>Options:</label>
+            <div>
+                <input type="checkbox" id="headless" checked>
+                <label for="headless">Headless Mode</label>
+            </div>
+            <div>
+                <input type="checkbox" id="use-vision" checked>
+                <label for="use-vision">Use Vision</label>
+            </div>
+            <div>
+                <input type="checkbox" id="disable-security">
+                <label for="disable-security">Disable Security</label>
+            </div>
+        </div>
+        
+        <button id="run-task-btn">Run Task</button>
+        
+        <div id="run-result" class="result" style="display: none;">
+            <div class="status" id="run-status"></div>
+            <pre id="run-response"></pre>
+        </div>
+    </div>
+    
+    <div id="check-status" class="tab-content">
+        <h2>Check Task Status</h2>
+        
+        <div class="form-group">
+            <label for="task-id">Task ID:</label>
+            <input type="text" id="task-id" placeholder="Enter task ID">
+        </div>
+        
+        <button id="check-status-btn">Check Status</button>
+        
+        <div id="status-result" class="result" style="display: none;">
+            <div class="status" id="status-status"></div>
+            <h3>Screenshots</h3>
+            <div id="status-screenshots" class="screenshots-container"></div>
+            <h3>Response Data</h3>
+            <pre id="status-response"></pre>
+        </div>
+    </div>
+
+    <script>
+        // API endpoint configuration
+        const API_CONFIG = {
+            BASE_URL: 'http://localhost:7793',
+            ENDPOINTS: {
+                RUN_TASK: '/api/browgene/run_task',
+                TASK_STATUS: '/api/browgene/task_status',
+            },
+            DEFAULT_HEADERS: {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json',
+            }
+        };
+
+        // Tab switching
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                // Remove active class from all tabs and content
+                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+                
+                // Add active class to clicked tab and corresponding content
+                tab.classList.add('active');
+                document.getElementById(tab.dataset.tab).classList.add('active');
+            });
+        });
+
+        // Run Task button
+        document.getElementById('run-task-btn').addEventListener('click', async () => {
+            const taskDescription = document.getElementById('task').value;
+            const agentType = document.getElementById('agent-type').value;
+            const llmProvider = document.getElementById('llm-provider').value;
+            const llmModel = document.getElementById('llm-model').value;
+            const apiKey = document.getElementById('api-key').value;
+            const headless = document.getElementById('headless').checked;
+            const useVision = document.getElementById('use-vision').checked;
+            const disableSecurity = document.getElementById('disable-security').checked;
+            
+            const runResult = document.getElementById('run-result');
+            const runStatus = document.getElementById('run-status');
+            const runResponse = document.getElementById('run-response');
+            
+            runResult.style.display = 'none';
+            
+            try {
+                const taskRequest = {
+                    task: taskDescription,
+                    agent_type: agentType,
+                    llm_provider: llmProvider,
+                    llm_model_name: llmModel,
+                    llm_temperature: 0.7,
+                    llm_api_key: apiKey,
+                    headless: headless,
+                    disable_security: disableSecurity,
+                    window_w: 1280,
+                    window_h: 720,
+                    enable_recording: false,
+                    max_steps: 50,
+                    use_vision: useVision,
+                    max_actions_per_step: 10
+                };
+                
+                const response = await fetch(`${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.RUN_TASK}`, {
+                    method: 'POST',
+                    headers: API_CONFIG.DEFAULT_HEADERS,
+                    body: JSON.stringify(taskRequest)
+                });
+                
+                const data = await response.json();
+                
+                runStatus.textContent = `Task started with ID: ${data.metadata.task_id}`;
+                runResponse.textContent = JSON.stringify(data, null, 2);
+                runResult.style.display = 'block';
+                
+                // Auto-fill the task ID in the check status tab
+                document.getElementById('task-id').value = data.metadata.task_id;
+            } catch (error) {
+                runStatus.textContent = 'Error running task';
+                runResponse.textContent = error.toString();
+                runResult.style.display = 'block';
+            }
+        });
+
+        // Check Status button
+        document.getElementById('check-status-btn').addEventListener('click', async () => {
+            const taskId = document.getElementById('task-id').value;
+            
+            const statusResult = document.getElementById('status-result');
+            const statusStatus = document.getElementById('status-status');
+            const statusResponse = document.getElementById('status-response');
+            
+            statusResult.style.display = 'none';
+            
+            try {
+                const response = await fetch(`${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.TASK_STATUS}/${taskId}`, {
+                    method: 'GET',
+                    headers: API_CONFIG.DEFAULT_HEADERS
+                });
+                
+                const data = await response.json();
+                
+                statusStatus.textContent = `Task Status: ${data.metadata.status}`;
+                statusResponse.textContent = JSON.stringify(data, null, 2);
+                
+                // Display screenshots if available
+                const screenshotsContainer = document.getElementById('status-screenshots');
+                screenshotsContainer.innerHTML = '';
+                
+                if (data.screenshots && data.screenshots.length > 0) {
+                    data.screenshots.forEach((screenshot, index) => {
+                        const img = document.createElement('img');
+                        img.src = `data:image/png;base64,${screenshot}`;
+                        img.alt = `Screenshot ${index + 1}`;
+                        img.className = 'screenshot';
+                        screenshotsContainer.appendChild(img);
+                    });
+                } else {
+                    screenshotsContainer.innerHTML = '<p>No screenshots available</p>';
+                }
+                
+                statusResult.style.display = 'block';
+            } catch (error) {
+                statusStatus.textContent = 'Error checking task status';
+                statusResponse.textContent = error.toString();
+                statusResult.style.display = 'block';
+            }
+        });
+    </script>
+</body>
+</html>

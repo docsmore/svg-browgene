@@ -31,7 +31,7 @@ from src.browser.custom_browser import CustomBrowser
 from src.agent.custom_prompts import CustomSystemPrompt, CustomAgentMessagePrompt
 from src.browser.custom_context import BrowserContextConfig, CustomBrowserContext
 from src.controller.custom_controller import CustomController
-from gradio.themes import Citrus, Default, Glass, Monochrome, Ocean, Origin, Soft, Base
+from gradio.themes import Base, Default, Monochrome, Soft
 from src.utils.default_config_settings import default_config, load_config_from_file, save_config_to_file, save_current_config, update_ui_from_config
 from src.utils.utils import update_model_dropdown, get_latest_files, capture_screenshot
 
@@ -640,10 +640,6 @@ theme_map = {
     "Default": Default(),
     "Soft": Soft(),
     "Monochrome": Monochrome(),
-    "Glass": Glass(),
-    "Origin": Origin(),
-    "Citrus": Citrus(),
-    "Ocean": Ocean(),
     "Base": Base()
 }
 
@@ -684,7 +680,7 @@ async def run_deep_search(research_task, max_search_iteration_input, max_query_p
     return markdown_content, file_path, gr.update(value="Stop", interactive=True),  gr.update(interactive=True) 
     
 
-def create_ui(config, theme_name="Ocean"):
+def create_ui(config, theme_name="Default"):
     css = """
     .gradio-container {
         max-width: 1200px !important;
@@ -1086,7 +1082,7 @@ def main():
     parser = argparse.ArgumentParser(description="Gradio UI for Browser Agent")
     parser.add_argument("--ip", type=str, default="127.0.0.1", help="IP address to bind to")
     parser.add_argument("--port", type=int, default=7788, help="Port to listen on")
-    parser.add_argument("--theme", type=str, default="Ocean", choices=theme_map.keys(), help="Theme to use for the UI")
+    parser.add_argument("--theme", type=str, default="Default", choices=theme_map.keys(), help="Theme to use for the UI")
     parser.add_argument("--dark-mode", action="store_true", help="Enable dark mode")
     args = parser.parse_args()
 
