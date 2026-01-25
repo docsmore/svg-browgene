@@ -605,6 +605,430 @@ async def execute_task(task_id: str, request: TaskRequest, llm: Any, browser_opt
         # Update active tasks
         active_tasks[task_id] = response
 
+# ============================================================================
+# SCRIPT MODE - Pure Playwright automation (no LLM required)
+# ============================================================================
+
+class ScriptAction(BaseModel):
+    """A single action to perform in script mode"""
+    type: str = Field(
+        ...,
+        description="Action type: goto, fill, click, wait_for, extract, screenshot, select, check, uncheck, type, press, scroll, evaluate"
+    )
+    selector: Optional[str] = Field(
+        None,
+        description="CSS or XPath selector for the target element"
+    )
+    value: Optional[str] = Field(
+        None,
+        description="Value for fill/type/select actions, or URL for goto"
+    )
+    url: Optional[str] = Field(
+        None,
+        description="URL for goto action"
+    )
+    timeout: Optional[int] = Field(
+        30000,
+        description="Timeout in milliseconds for wait operations"
+    )
+    outputAs: Optional[str] = Field(
+        None,
+        description="Variable name to store extracted data or screenshot"
+    )
+    script: Optional[str] = Field(
+        None,
+        description="JavaScript code for evaluate action"
+    )
+    key: Optional[str] = Field(
+        None,
+        description="Key to press for press action (e.g., 'Enter', 'Tab')"
+    )
+    direction: Optional[str] = Field(
+        "down",
+        description="Scroll direction: up, down, left, right"
+    )
+    amount: Optional[int] = Field(
+        500,
+        description="Scroll amount in pixels"
+    )
+    attribute: Optional[str] = Field(
+        None,
+        description="Attribute to extract (e.g., 'href', 'src'). If None, extracts text content"
+    )
+    all: Optional[bool] = Field(
+        False,
+        description="If True, extract from all matching elements (returns array)"
+    )
+
+
+class ScriptRequest(BaseModel):
+    """Request model for script-based browser automation"""
+    url: Optional[str] = Field(
+        None,
+        description="Initial URL to navigate to (optional if first action is goto)"
+    )
+    actions: List[ScriptAction] = Field(
+        ...,
+        description="List of actions to perform in sequence"
+    )
+    variables: Optional[Dict[str, Any]] = Field(
+        default_factory=dict,
+        description="Variables for interpolation in action values (e.g., {{username}})"
+    )
+    headless: bool = Field(
+        True,
+        description="Whether to run browser in headless mode"
+    )
+    window_w: int = Field(
+        1280,
+        description="Browser window width"
+    )
+    window_h: int = Field(
+        720,
+        description="Browser window height"
+    )
+    timeout: int = Field(
+        30000,
+        description="Default timeout for actions in milliseconds"
+    )
+    user_agent: Optional[str] = Field(
+        None,
+        description="Custom user agent string"
+    )
+    cookies: Optional[List[Dict[str, Any]]] = Field(
+        None,
+        description="Cookies to set before automation"
+    )
+    headers: Optional[Dict[str, str]] = Field(
+        None,
+        description="Extra HTTP headers to set"
+    )
+
+
+class ScriptResponse(BaseModel):
+    """Response model for script-based automation"""
+    success: bool = Field(
+        ...,
+        description="Whether all actions completed successfully"
+    )
+    results: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Extracted data and screenshots keyed by outputAs names"
+    )
+    actions_completed: int = Field(
+        0,
+        description="Number of actions successfully completed"
+    )
+    actions_total: int = Field(
+        0,
+        description="Total number of actions in the script"
+    )
+    error: Optional[str] = Field(
+        None,
+        description="Error message if script failed"
+    )
+    failed_action: Optional[int] = Field(
+        None,
+        description="Index of the action that failed (0-based)"
+    )
+    execution_time_ms: int = Field(
+        0,
+        description="Total execution time in milliseconds"
+    )
+    final_url: Optional[str] = Field(
+        None,
+        description="Final URL after all actions"
+    )
+    metadata: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Additional metadata about the execution"
+    )
+
+
+def interpolate_variables(text: str, variables: Dict[str, Any]) -> str:
+    """Replace {{variable}} placeholders with actual values"""
+    if not text or not variables:
+        return text
+    
+    import re
+    result = text
+    
+    # Find all {{variable}} patterns
+    pattern = r'\{\{([^}]+)\}\}'
+    matches = re.findall(pattern, text)
+    
+    for match in matches:
+        var_name = match.strip()
+        if var_name in variables:
+            value = variables[var_name]
+            result = result.replace(f'{{{{{match}}}}}', str(value))
+    
+    return result
+
+
+@app.post("/api/browgene/run_script", response_model=ScriptResponse,
+         summary="Run Script",
+         description="Run deterministic browser automation using Playwright (no LLM required)")
+async def run_script(request: ScriptRequest):
+    """
+    Execute a sequence of browser actions using pure Playwright.
+    
+    This endpoint provides deterministic, fast browser automation without
+    requiring an LLM. Ideal for login flows, form filling, and data extraction
+    with known page structures.
+    
+    Supported action types:
+    - goto: Navigate to a URL
+    - fill: Fill an input field
+    - click: Click an element
+    - wait_for: Wait for an element to appear
+    - extract: Extract text/attribute from element(s)
+    - screenshot: Capture a screenshot
+    - select: Select a dropdown option
+    - check/uncheck: Toggle checkboxes
+    - type: Type text with keyboard events
+    - press: Press a keyboard key
+    - scroll: Scroll the page
+    - evaluate: Run JavaScript code
+    
+    Args:
+        request: The script request containing actions and configuration
+        
+    Returns:
+        ScriptResponse: Results of the script execution
+    """
+    import time
+    start_time = time.time()
+    
+    response = ScriptResponse(
+        success=False,
+        actions_total=len(request.actions),
+        metadata={
+            "start_time": utils.get_current_time_iso()
+        }
+    )
+    
+    playwright = None
+    browser = None
+    context = None
+    page = None
+    
+    try:
+        # Start Playwright
+        playwright = await async_playwright().start()
+        
+        # Launch browser
+        browser = await playwright.chromium.launch(
+            headless=request.headless,
+            args=[
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                f'--window-size={request.window_w},{request.window_h}'
+            ]
+        )
+        
+        # Create context with optional settings
+        context_options = {
+            "viewport": {"width": request.window_w, "height": request.window_h}
+        }
+        
+        if request.user_agent:
+            context_options["user_agent"] = request.user_agent
+            
+        if request.headers:
+            context_options["extra_http_headers"] = request.headers
+        
+        context = await browser.new_context(**context_options)
+        
+        # Set cookies if provided
+        if request.cookies:
+            await context.add_cookies(request.cookies)
+        
+        # Create page
+        page = await context.new_page()
+        page.set_default_timeout(request.timeout)
+        
+        # Navigate to initial URL if provided
+        if request.url:
+            initial_url = interpolate_variables(request.url, request.variables or {})
+            await page.goto(initial_url, wait_until="domcontentloaded")
+        
+        # Execute actions
+        results = {}
+        
+        for i, action in enumerate(request.actions):
+            try:
+                action_type = action.type.lower()
+                selector = interpolate_variables(action.selector, request.variables or {}) if action.selector else None
+                value = interpolate_variables(action.value, request.variables or {}) if action.value else None
+                
+                logger.info(f"Executing action {i+1}/{len(request.actions)}: {action_type}")
+                
+                if action_type == "goto":
+                    url = action.url or value
+                    if url:
+                        url = interpolate_variables(url, request.variables or {})
+                        await page.goto(url, wait_until="domcontentloaded")
+                
+                elif action_type == "fill":
+                    if selector and value is not None:
+                        await page.fill(selector, value)
+                
+                elif action_type == "click":
+                    if selector:
+                        await page.click(selector)
+                
+                elif action_type == "wait_for":
+                    if selector:
+                        timeout = action.timeout or request.timeout
+                        await page.wait_for_selector(selector, timeout=timeout)
+                
+                elif action_type == "extract":
+                    if selector:
+                        if action.all:
+                            # Extract from all matching elements
+                            elements = await page.query_selector_all(selector)
+                            extracted = []
+                            for el in elements:
+                                if action.attribute:
+                                    val = await el.get_attribute(action.attribute)
+                                else:
+                                    val = await el.text_content()
+                                extracted.append(val)
+                            
+                            if action.outputAs:
+                                results[action.outputAs] = extracted
+                        else:
+                            # Extract from first matching element
+                            element = await page.query_selector(selector)
+                            if element:
+                                if action.attribute:
+                                    extracted = await element.get_attribute(action.attribute)
+                                else:
+                                    extracted = await element.text_content()
+                                
+                                if action.outputAs:
+                                    results[action.outputAs] = extracted
+                
+                elif action_type == "screenshot":
+                    screenshot_bytes = await page.screenshot(type="png", full_page=False)
+                    screenshot_base64 = base64.b64encode(screenshot_bytes).decode("utf-8")
+                    
+                    output_name = action.outputAs or f"screenshot_{i}"
+                    results[output_name] = screenshot_base64
+                
+                elif action_type == "select":
+                    if selector and value:
+                        await page.select_option(selector, value)
+                
+                elif action_type == "check":
+                    if selector:
+                        await page.check(selector)
+                
+                elif action_type == "uncheck":
+                    if selector:
+                        await page.uncheck(selector)
+                
+                elif action_type == "type":
+                    if selector and value is not None:
+                        await page.type(selector, value)
+                
+                elif action_type == "press":
+                    key = action.key or value
+                    if key:
+                        if selector:
+                            await page.press(selector, key)
+                        else:
+                            await page.keyboard.press(key)
+                
+                elif action_type == "scroll":
+                    direction = action.direction or "down"
+                    amount = action.amount or 500
+                    
+                    if direction == "down":
+                        await page.evaluate(f"window.scrollBy(0, {amount})")
+                    elif direction == "up":
+                        await page.evaluate(f"window.scrollBy(0, -{amount})")
+                    elif direction == "right":
+                        await page.evaluate(f"window.scrollBy({amount}, 0)")
+                    elif direction == "left":
+                        await page.evaluate(f"window.scrollBy(-{amount}, 0)")
+                
+                elif action_type == "evaluate":
+                    script = action.script or value
+                    if script:
+                        script = interpolate_variables(script, request.variables or {})
+                        result = await page.evaluate(script)
+                        
+                        if action.outputAs:
+                            results[action.outputAs] = result
+                
+                elif action_type == "wait":
+                    # Simple wait/delay
+                    delay_ms = action.timeout or 1000
+                    await asyncio.sleep(delay_ms / 1000)
+                
+                else:
+                    logger.warning(f"Unknown action type: {action_type}")
+                
+                response.actions_completed = i + 1
+                
+            except Exception as action_error:
+                logger.error(f"Action {i+1} failed: {action_error}")
+                response.error = f"Action {i+1} ({action.type}) failed: {str(action_error)}"
+                response.failed_action = i
+                break
+        
+        # Get final URL
+        response.final_url = page.url
+        
+        # Check if all actions completed
+        if response.actions_completed == len(request.actions):
+            response.success = True
+        
+        response.results = results
+        
+    except Exception as e:
+        logger.error(f"Script execution error: {e}", exc_info=True)
+        response.error = str(e)
+        
+    finally:
+        # Cleanup
+        try:
+            if page:
+                await page.close()
+            if context:
+                await context.close()
+            if browser:
+                await browser.close()
+            if playwright:
+                await playwright.stop()
+        except Exception as cleanup_error:
+            logger.error(f"Cleanup error: {cleanup_error}")
+        
+        # Calculate execution time
+        response.execution_time_ms = int((time.time() - start_time) * 1000)
+        response.metadata["end_time"] = utils.get_current_time_iso()
+    
+    return response
+
+
+@app.get("/api/browgene/health", summary="Health Check", description="Check API server health")
+async def health_check():
+    """Health check endpoint"""
+    return {
+        "status": "healthy",
+        "service": "svg-browgene",
+        "version": "1.0.0",
+        "endpoints": {
+            "ai_mode": "/api/browgene/run_task",
+            "script_mode": "/api/browgene/run_script",
+            "task_status": "/api/browgene/task_status/{task_id}"
+        }
+    }
+
+
 def start_server():
     """Start the API server"""
     uvicorn.run(
