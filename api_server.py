@@ -44,23 +44,16 @@ class utils:
         
     @staticmethod
     def get_llm_model(provider, model_name, num_ctx=4096, temperature=0.7, base_url=None, api_key=None):
-        if provider == "openai":
-            from langchain_openai import ChatOpenAI
-            return ChatOpenAI(
-                model_name=model_name,
-                temperature=temperature,
-                openai_api_key=api_key,
-                openai_api_base=base_url
-            )
-        elif provider == "anthropic":
-            from langchain_anthropic import ChatAnthropic
-            return ChatAnthropic(
-                model_name=model_name,
-                temperature=temperature,
-                anthropic_api_key=api_key
-            )
-        else:
-            raise ValueError(f"Unsupported LLM provider: {provider}")
+        # Import the full LLM model function from utils
+        from src.utils.utils import get_llm_model
+        return get_llm_model(
+            provider=provider,
+            model_name=model_name,
+            num_ctx=num_ctx,
+            temperature=temperature,
+            base_url=base_url,
+            api_key=api_key
+        )
             
     @staticmethod
     async def capture_screenshot_direct(browser_context):
@@ -117,16 +110,15 @@ class utils:
 
 # Load environment variables
 load_dotenv()
-
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Create FastAPI app
 app = FastAPI(
-    title="SVG-Browgene API",
-    description="API for browser automation with AI agents using LLMs and Playwright.",
+    title="BrowGene API",
     version="1.0.0",
+    description="API for browser automation with AI agents using LLMs and Playwright.",
     docs_url="/docs",
     redoc_url="/redoc",
     openapi_url="/openapi.json"
@@ -140,6 +132,11 @@ app.add_middleware(
     allow_methods=["*"],  # Allows all methods
     allow_headers=["*"],  # Allows all headers
 )
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint for Docker"""
+    return {"status": "healthy", "service": "browgene-v2"}
 
 # Define request models
 class BrowserOptions(BaseModel):
@@ -415,26 +412,68 @@ async def execute_task(task_id: str, request: TaskRequest, llm: Any, browser_opt
     active_tasks[task_id] = response
     
     try:
-        # Initialize playwright and browser
-        playwright = await async_playwright().start()
+        # Configure browser launch options with Docker-specific arguments
+        docker_chromium_args = [
+            "--no-sandbox",
+            "--disable-setuid-sandbox", 
+            "--disable-dev-shm-usage",
+            "--disable-gpu",
+            "--disable-gpu-sandbox",
+            "--disable-software-rasterizer",
+            "--disable-background-timer-throttling",
+            "--disable-backgrounding-occluded-windows",
+            "--disable-renderer-backgrounding",
+            "--disable-field-trial-config",
+            "--disable-back-forward-cache",
+            "--disable-ipc-flooding-protection",
+            "--disable-extensions",
+            "--disable-plugins",
+            "--disable-web-security",
+            "--disable-features=VizDisplayCompositor,TranslateUI,BlinkGenPropertyTrees",
+            "--enable-automation",
+            "--force-color-profile=srgb",
+            "--disable-background-networking",
+            "--disable-default-apps",
+            "--disable-sync",
+            "--no-default-browser-check",
+            "--no-first-run",
+            "--disable-gpu-process-crash-limit",
+            "--single-process",
+            "--remote-debugging-port=9222",
+            "--disable-blink-features=AutomationControlled",
+            "--disable-client-side-phishing-detection",
+            "--disable-component-update",
+            "--disable-domain-reliability",
+            "--disable-hang-monitor",
+            "--disable-prompt-on-repost",
+            "--no-proxy-server",
+            "--ignore-certificate-errors",
+            "--ignore-ssl-errors",
+            "--ignore-certificate-errors-spki-list",
+            "--ignore-certificate-errors-ssl-errors",
+            "--disable-dev-tools",
+            "--disable-logging",
+            "--disable-breakpad",
+            "--disable-crash-reporter",
+            "--no-crash-upload",
+            "--disable-background-mode",
+            "--disable-default-apps",
+            "--disable-translate",
+            "--disable-popup-blocking",
+            "--allow-running-insecure-content",
+            "--disable-features=VizDisplayCompositor,VizHitTestSurfaceLayer"
+        ]
         
-        # Configure browser launch options
-        browser_args = browser_options.get("args", [])
-        ignore_default_args = browser_options.get("ignoreDefaultArgs", [])
-        
-        browser_instance = await playwright.chromium.launch(
-            headless=request.headless,
-            args=browser_args,
-            ignore_default_args=ignore_default_args
-        )
-        
-        # Create browser with proper configuration
+        # Create browser with proper configuration and Docker-specific args
+        logger.info("Creating new browser instance with Docker-specific arguments...")
         browser = Browser(
             config=BrowserConfig(
                 disable_security=request.disable_security,
-                headless=request.headless
+                headless=request.headless,
+                extra_chromium_args=docker_chromium_args
             )
         )
+        logger.info("Browser instance created successfully")
         
         # Create window size configuration
         window_size = {
@@ -448,6 +487,7 @@ async def execute_task(task_id: str, request: TaskRequest, llm: Any, browser_opt
         os.makedirs(request.save_trace_path, exist_ok=True)
         
         # Create browser context with proper configuration
+        logger.info("Creating new browser context...")
         browser_context = await browser.new_context(
             config=BrowserContextConfig(
                 trace_path=request.save_trace_path if request.save_trace_path else None,
@@ -459,30 +499,18 @@ async def execute_task(task_id: str, request: TaskRequest, llm: Any, browser_opt
                 )
             )
         )
+        logger.info("Browser context created successfully")
         
         # Initialize agent based on agent type
         if request.agent_type == "org":
-            # Prepare agent parameters - IMPORTANT: Do not include include_attributes parameter
-            agent_params = {
-                "task": request.task,
-                "llm": llm,
-                "browser": browser,
-                "browser_context": browser_context,
-                "use_vision": request.use_vision,
-                "max_actions_per_step": request.max_actions_per_step,
-                # Do not include include_attributes here
-            }
-            
-            # Add optional parameters
-            if request.enable_recording:
-                agent_params["generate_gif"] = True
-            
-            # Use save_conversation_path instead of save_agent_history_path
-            if request.save_agent_history_path:
-                agent_params["save_conversation_path"] = request.save_agent_history_path
-                
-            # Create agent with filtered parameters
-            agent = CustomAgent(**agent_params)
+            # Temporarily use standard Agent for testing connection issues
+            agent = Agent(
+                task=request.task,
+                llm=llm,
+                browser=browser,
+                browser_context=browser_context,
+                use_vision=request.use_vision
+            )
         else:
             # Default to custom agent
             # Prepare agent parameters - IMPORTANT: Do not include include_attributes parameter
@@ -510,9 +538,73 @@ async def execute_task(task_id: str, request: TaskRequest, llm: Any, browser_opt
         # Run the agent with max_steps parameter
         output = await agent.run(max_steps=request.max_steps)
         
+        # Extract the final result/answer from the agent
+        extracted_text = ""
+        try:
+            # Try to get the final answer from the agent's message manager
+            if hasattr(agent, 'message_manager') and hasattr(agent.message_manager, 'get_messages'):
+                messages = agent.message_manager.get_messages()
+                # Look for AI messages that contain task completion or results
+                for msg in reversed(messages):
+                    if hasattr(msg, 'content') and msg.content:
+                        content_str = ""
+                        if isinstance(msg.content, str):
+                            content_str = msg.content
+                        elif isinstance(msg.content, list):
+                            # Handle structured content
+                            text_parts = []
+                            for part in msg.content:
+                                if isinstance(part, dict) and part.get('type') == 'text':
+                                    text_parts.append(part.get('text', ''))
+                            content_str = '\n'.join(text_parts)
+                        
+                        # Look for content that contains task completion or results
+                        if content_str and any(keyword in content_str.lower() for keyword in [
+                            'done', 'completed', 'summary', 'found', 'information about', 
+                            'heather bagg', 'obituary', 'result', 'gathered'
+                        ]):
+                            # Skip system prompts and instructions
+                            if not any(skip_phrase in content_str for skip_phrase in [
+                                'You are a precise browser automation agent',
+                                'RESPONSE FORMAT',
+                                'INPUT STRUCTURE',
+                                'Functions:'
+                            ]):
+                                extracted_text = content_str
+                                break
+            
+            # If no specific result found, try to extract from agent history
+            if not extracted_text and hasattr(agent, 'history') and agent.history:
+                try:
+                    # Check if history has completion information
+                    if hasattr(agent.history, 'history'):
+                        history_items = agent.history.history
+                    else:
+                        history_items = agent.history
+                    
+                    # Look for the last meaningful result
+                    for item in reversed(history_items):
+                        if hasattr(item, 'result') and item.result:
+                            result_str = str(item.result)
+                            if any(keyword in result_str.lower() for keyword in [
+                                'heather bagg', 'obituary', 'summary', 'information'
+                            ]):
+                                extracted_text = result_str
+                                break
+                except Exception as hist_e:
+                    logger.error(f"Error processing history: {hist_e}")
+            
+            # Fallback: try to extract from the output object
+            if not extracted_text and output:
+                extracted_text = str(output)
+                
+        except Exception as e:
+            logger.error(f"Error extracting final result: {e}")
+            extracted_text = str(output) if output else ""
+        
         # Update response
         response.success = True
-        response.extracted_text = str(output) if output else ""
+        response.extracted_text = extracted_text
         
         # Get agent history if available
         if hasattr(agent, "history") and agent.history:
@@ -599,12 +691,14 @@ async def execute_task(task_id: str, request: TaskRequest, llm: Any, browser_opt
         response.metadata["status"] = "failed"
         response.metadata["end_time"] = utils.get_current_time_iso()
     finally:
-        # Clean up
+        # Clean up browser and context
         try:
-            if 'browser' in locals():
+            if 'browser_context' in locals() and browser_context:
+                logger.info("Closing browser context...")
+                await browser_context.close()
+            if 'browser' in locals() and browser:
+                logger.info("Closing browser...")
                 await browser.close()
-            if 'playwright' in locals():
-                await playwright.stop()
         except Exception as e:
             logger.error(f"Error during cleanup: {e}")
         

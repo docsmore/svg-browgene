@@ -84,9 +84,8 @@ class CustomMessageManager(MessageManager):
         """Add browser state as human message"""
         # otherwise add state message and result to next message (which will not stay in memory)
         state_message = self.agent_prompt_class(
-            state,
-            actions,
-            result,
+            state=state,
+            result=result,
             include_attributes=self.include_attributes,
             max_error_length=self.max_error_length,
             step_info=step_info,

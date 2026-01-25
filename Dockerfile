@@ -38,6 +38,7 @@ RUN apt-get update && apt-get install -y \
     fonts-dejavu \
     fonts-dejavu-core \
     fonts-dejavu-extra \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # Install noVNC
@@ -81,4 +82,12 @@ COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
 EXPOSE 7788 7793 6080 5901
 
-CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]
+# Create a startup script that can run either mode
+COPY docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh
+
+# Default to API server mode, but allow override via environment variable
+ENV BROWGENE_MODE=api
+ENV API_PORT=7793
+
+CMD ["/docker-entrypoint.sh"]

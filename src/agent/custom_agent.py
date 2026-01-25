@@ -33,7 +33,7 @@ from langchain_core.messages import (
     HumanMessage,
     AIMessage
 )
-from browser_use.agent.prompts import PlannerPrompt
+# from browser_use.agent.prompts import PlannerPrompt  # Not available in this version
 
 from json_repair import repair_json
 from src.utils.agent_state import AgentState
@@ -54,7 +54,6 @@ class CustomAgent(Agent):
             browser_context: BrowserContext | None = None,
             controller: Controller = Controller(),
             use_vision: bool = True,
-            use_vision_for_planner: bool = False,
             save_conversation_path: Optional[str] = None,
             save_conversation_path_encoding: Optional[str] = 'utf-8',
             max_failures: int = 3,
@@ -66,7 +65,6 @@ class CustomAgent(Agent):
             message_context: Optional[str] = None,
             generate_gif: bool | str = True,
             sensitive_data: Optional[Dict[str, str]] = None,
-            available_file_paths: Optional[list[str]] = None,
             include_attributes: list[str] = [
                 'title',
                 'type',
@@ -88,8 +86,6 @@ class CustomAgent(Agent):
             register_done_callback: Callable[['AgentHistoryList'], None] | None = None,
             tool_calling_method: Optional[str] = 'auto',
             page_extraction_llm: Optional[BaseChatModel] = None,
-            planner_llm: Optional[BaseChatModel] = None,
-            planner_interval: int = 1,  # Run planner every N steps
     ):
 
         # Load sensitive data from environment variables
@@ -112,7 +108,6 @@ class CustomAgent(Agent):
             browser_context=browser_context,
             controller=controller,
             use_vision=use_vision,
-            use_vision_for_planner=use_vision_for_planner,
             save_conversation_path=save_conversation_path,
             save_conversation_path_encoding=save_conversation_path_encoding,
             max_failures=max_failures,
@@ -123,7 +118,6 @@ class CustomAgent(Agent):
             message_context=message_context,
             generate_gif=generate_gif,
             sensitive_data=sensitive_data,
-            available_file_paths=available_file_paths,
             include_attributes=include_attributes,
             max_error_length=max_error_length,
             max_actions_per_step=max_actions_per_step,
@@ -131,10 +125,9 @@ class CustomAgent(Agent):
             initial_actions=initial_actions,
             register_new_step_callback=register_new_step_callback,
             register_done_callback=register_done_callback,
-            tool_calling_method=tool_calling_method,
-            planner_llm=planner_llm,
-            planner_interval=planner_interval
+            tool_calling_method=tool_calling_method
         )
+        
         if self.model_name in ["deepseek-reasoner"] or "deepseek-r1" in self.model_name:
             # deepseek-reasoner does not support function calling
             self.use_deepseek_r1 = True
@@ -255,57 +248,8 @@ class CustomAgent(Agent):
 
     async def _run_planner(self) -> Optional[str]:
         """Run the planner to analyze state and suggest next steps"""
-        # Skip planning if no planner_llm is set
-        if not self.planner_llm:
-            return None
-
-        # Create planner message history using full message history
-        planner_messages = [
-            PlannerPrompt(self.action_descriptions).get_system_message(),
-            *self.message_manager.get_messages()[1:],  # Use full message history except the first
-        ]
-
-        if not self.use_vision_for_planner and self.use_vision:
-            last_state_message = planner_messages[-1]
-            # remove image from last state message
-            new_msg = ''
-            if isinstance(last_state_message.content, list):
-                for msg in last_state_message.content:
-                    if msg['type'] == 'text':
-                        new_msg += msg['text']
-                    elif msg['type'] == 'image_url':
-                        continue
-            else:
-                new_msg = last_state_message.content
-
-            planner_messages[-1] = HumanMessage(content=new_msg)
-
-        # Get planner output
-        response = await self.planner_llm.ainvoke(planner_messages)
-        plan = response.content
-        last_state_message = planner_messages[-1]
-        # remove image from last state message
-        if isinstance(last_state_message.content, list):
-            for msg in last_state_message.content:
-                if msg['type'] == 'text':
-                    msg['text'] += f"\nPlanning Agent outputs plans:\n {plan}\n"
-        else:
-            last_state_message.content += f"\nPlanning Agent outputs plans:\n {plan}\n "
-
-        try:
-            plan_json = json.loads(plan.replace("```json", "").replace("```", ""))
-            logger.info(f'📋 Plans:\n{json.dumps(plan_json, indent=4)}')
-
-            if hasattr(response, "reasoning_content"):
-                logger.info("🤯 Start Planning Deep Thinking: ")
-                logger.info(response.reasoning_content)
-                logger.info("🤯 End Planning Deep Thinking")
-
-        except json.JSONDecodeError:
-            logger.info(f'📋 Plans:\n{plan}')
-        except Exception as e:
-            logger.debug(f'Error parsing planning analysis: {e}')
-            logger.info(f'📋 Plans: {plan}')
+        # Skip planning - PlannerPrompt not available in this version
+        return None
 
     @time_execution_async("--step")
     async def step(self, step_info: Optional[CustomAgentStepInfo] = None) -> None:
@@ -323,9 +267,7 @@ class CustomAgent(Agent):
             self.message_manager.add_state_message(state, self._last_actions, self._last_result, step_info,
                                                    self.use_vision)
 
-            # Run planner at specified intervals if planner is configured
-            if self.planner_llm and self.n_steps % self.planning_interval == 0:
-                await self._run_planner()
+            # Planner functionality disabled in this version
             input_messages = self.message_manager.get_messages()
             self._check_if_stopped_or_paused()
             try:
@@ -350,7 +292,7 @@ class CustomAgent(Agent):
                 page_extraction_llm=self.page_extraction_llm,
                 sensitive_data=self.sensitive_data,
                 check_break_if_paused=lambda: self._check_if_stopped_or_paused(),
-                available_file_paths=self.available_file_paths,
+                available_file_paths=None,
             )
             if len(result) != len(actions):
                 # I think something changes, such information should let LLM know
@@ -408,7 +350,7 @@ class CustomAgent(Agent):
                     check_for_new_elements=False,
                     page_extraction_llm=self.page_extraction_llm,
                     check_break_if_paused=lambda: self._check_if_stopped_or_paused(),
-                    available_file_paths=self.available_file_paths,
+                    available_file_paths=None,
                 )
                 self._last_result = result
 
@@ -440,10 +382,15 @@ class CustomAgent(Agent):
                     break
             else:
                 logger.info("❌ Failed to complete task in maximum steps")
-                if not self.extracted_content:
-                    self.history.history[-1].result[-1].extracted_content = step_info.memory
-                else:
-                    self.history.history[-1].result[-1].extracted_content = self.extracted_content
+                # Safely access history and result arrays
+                if (self.history.history and 
+                    len(self.history.history) > 0 and 
+                    self.history.history[-1].result and 
+                    len(self.history.history[-1].result) > 0):
+                    if not self.extracted_content:
+                        self.history.history[-1].result[-1].extracted_content = step_info.memory
+                    else:
+                        self.history.history[-1].result[-1].extracted_content = self.extracted_content
 
             return self.history
 
