@@ -1,0 +1,25 @@
+FROM mcr.microsoft.com/playwright/python:v1.49.0-noble
+
+WORKDIR /app
+
+# Copy only the API server requirements
+COPY api_server.py .
+
+# Install minimal Python dependencies for the API server
+RUN pip install --no-cache-dir \
+    fastapi \
+    uvicorn \
+    pydantic \
+    playwright \
+    pillow \
+    python-dotenv
+
+# Playwright browsers are already installed in the base image
+
+ENV PYTHONUNBUFFERED=1
+ENV PORT=7793
+
+EXPOSE 7793
+
+# Run the API server directly
+CMD ["python", "api_server.py"]

@@ -1,14 +1,13 @@
-FROM python:3.11-slim
+FROM python:3.11-slim-bookworm
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
     wget \
-    netcat-traditional \
+    netcat-openbsd \
     gnupg \
     curl \
     unzip \
     xvfb \
-    libgconf-2-4 \
     libxss1 \
     libnss3 \
     libnspr4 \
@@ -28,7 +27,6 @@ RUN apt-get update && apt-get install -y \
     fonts-liberation \
     dbus \
     xauth \
-    xvfb \
     x11vnc \
     tigervnc-tools \
     supervisor \
@@ -81,6 +79,6 @@ ENV RESOLUTION_HEIGHT=1080
 RUN mkdir -p /var/log/supervisor
 COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
-EXPOSE 7788 6080 5901
+EXPOSE 7788 7793 6080 5901
 
 CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]

@@ -20,14 +20,20 @@ from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 import uvicorn
 
-# Import SVG-Browgene components
-from langchain_openai import ChatOpenAI
-from browser_use.browser.browser import Browser, BrowserConfig
-from browser_use.browser.context import BrowserContextConfig, BrowserContextWindowSize
-from src.agent.custom_agent import CustomAgent
-from src.browser.custom_browser import CustomBrowser
+# Import Playwright for script mode (always available)
 from playwright.async_api import async_playwright
-from src.utils.utils import capture_screenshot
+
+# Try to import SVG-Browgene components for AI mode (optional)
+BROWGENE_AI_AVAILABLE = False
+try:
+    from langchain_openai import ChatOpenAI
+    from browser_use import Agent
+    from src.agent.custom_agent import CustomAgent
+    from src.browser.custom_browser import CustomBrowser
+    from src.utils.utils import capture_screenshot
+    BROWGENE_AI_AVAILABLE = True
+except ImportError as e:
+    logging.warning(f"BrowGene AI mode not available: {e}. Script mode will still work.")
 
 # Create a utils module for helper functions
 class utils:
@@ -885,6 +891,7 @@ async def run_script(request: ScriptRequest):
                         await page.wait_for_selector(selector, timeout=timeout)
                 
                 elif action_type == "extract":
+                    logger.info(f"Extract action: selector={selector}, outputAs={action.outputAs}, all={action.all}, attribute={action.attribute}")
                     if selector:
                         if action.all:
                             # Extract from all matching elements
@@ -897,8 +904,10 @@ async def run_script(request: ScriptRequest):
                                     val = await el.text_content()
                                 extracted.append(val)
                             
+                            logger.info(f"Extracted {len(extracted)} items from all matching elements")
                             if action.outputAs:
                                 results[action.outputAs] = extracted
+                                logger.info(f"Stored results under key: {action.outputAs}")
                         else:
                             # Extract from first matching element
                             element = await page.query_selector(selector)
