@@ -1,30 +1,8 @@
-FROM python:3.11-slim-bookworm
+FROM mcr.microsoft.com/playwright/python:v1.57.0-noble
 
-# Install system dependencies
+# Install additional system dependencies for VNC/noVNC
 RUN apt-get update && apt-get install -y \
-    wget \
-    netcat-openbsd \
-    gnupg \
-    curl \
-    unzip \
     xvfb \
-    libxss1 \
-    libnss3 \
-    libnspr4 \
-    libasound2 \
-    libatk1.0-0 \
-    libatk-bridge2.0-0 \
-    libcups2 \
-    libdbus-1-3 \
-    libdrm2 \
-    libgbm1 \
-    libgtk-3-0 \
-    libxcomposite1 \
-    libxdamage1 \
-    libxfixes3 \
-    libxrandr2 \
-    xdg-utils \
-    fonts-liberation \
     dbus \
     xauth \
     x11vnc \
@@ -33,7 +11,6 @@ RUN apt-get update && apt-get install -y \
     net-tools \
     procps \
     git \
-    python3-numpy \
     fontconfig \
     fonts-dejavu \
     fonts-dejavu-core \
@@ -56,10 +33,8 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install Playwright and browsers with system dependencies
+# Playwright browsers are already installed in the base image
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
-RUN playwright install --with-deps chromium
-RUN playwright install-deps
 
 # Copy the application code
 COPY . .
