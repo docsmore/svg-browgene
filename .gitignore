@@ -189,3 +189,18 @@ data/
 
 # For Config Files (Current Settings)
 .config.pkl
+
+# BrowGene recordings & snapshots (runtime artifacts)
+recordings/
+executions/
+
+# Frontend (Next.js)
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+
+# Node
+node_modules/
+
+# Tasks (user-created, runtime data)
+tasks/
