@@ -132,6 +132,10 @@ class Explorer:
         headless: bool = False,
         recordings_path: Optional[str] = None,
         snapshots_path: Optional[str] = None,
+        # Vertex AI config (used when llm_provider="google")
+        use_vertexai: bool = False,
+        vertexai_project: Optional[str] = None,
+        vertexai_location: str = "us-central1",
     ):
         self.llm_provider = llm_provider
         self.llm_model = llm_model
@@ -139,6 +143,9 @@ class Explorer:
         self.headless = headless
         self.recordings_path = recordings_path
         self.snapshots_path = snapshots_path
+        self.use_vertexai = use_vertexai
+        self.vertexai_project = vertexai_project
+        self.vertexai_location = vertexai_location
         self._explorations: Dict[str, ExplorationResult] = {}
         # Active browser sessions keyed by exploration_id for live screenshot capture
         self._active_sessions: Dict[str, Any] = {}
@@ -333,7 +340,15 @@ class Explorer:
                 return ChatBrowserUse(model=self.llm_model)
             elif self.llm_provider == "google":
                 from browser_use.llm.models import ChatGoogle
-                return ChatGoogle(model=self.llm_model)
+                kwargs: Dict[str, Any] = {"model": self.llm_model}
+                if self.use_vertexai:
+                    kwargs["vertexai"] = True
+                    if self.vertexai_project:
+                        kwargs["project"] = self.vertexai_project
+                    if self.vertexai_location:
+                        kwargs["location"] = self.vertexai_location
+                    logger.info(f"Creating ChatGoogle with Vertex AI: project={self.vertexai_project}, location={self.vertexai_location}, model={self.llm_model}")
+                return ChatGoogle(**kwargs)
             else:
                 logger.error(f"Unknown LLM provider: {self.llm_provider}")
                 return None

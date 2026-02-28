@@ -61,15 +61,41 @@ HEADLESS = os.getenv("BROWGENE_HEADLESS", "false").lower() == "true"
 RECORDINGS_PATH = os.getenv("BROWGENE_RECORDINGS_PATH", "./recordings/browgene-sessions")
 SNAPSHOTS_PATH = os.getenv("BROWGENE_SNAPSHOTS_PATH", "./recordings/browgene-snapshots")
 
+# Vertex AI config
+USE_VERTEXAI = os.getenv("BROWGENE_USE_VERTEXAI", "true").lower() == "true"
+VERTEXAI_LOCATION = os.getenv("BROWGENE_VERTEXAI_LOCATION", "us-central1")
+VERTEXAI_PROJECT = os.getenv("BROWGENE_VERTEXAI_PROJECT", "")
+
+# Auto-detect project_id from Google credentials if not explicitly set
+if USE_VERTEXAI and not VERTEXAI_PROJECT:
+    _gac_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "")
+    if _gac_path and Path(_gac_path).exists():
+        try:
+            import json as _json
+            with open(_gac_path, "r") as _f:
+                _creds = _json.load(_f)
+                VERTEXAI_PROJECT = _creds.get("project_id", "")
+                if VERTEXAI_PROJECT:
+                    logger.info(f"Auto-detected Vertex AI project from credentials: {VERTEXAI_PROJECT}")
+        except Exception as _e:
+            logger.warning(f"Could not read project_id from {_gac_path}: {_e}")
+
 # Ensure recording/snapshot directories exist
 Path(RECORDINGS_PATH).mkdir(parents=True, exist_ok=True)
 Path(SNAPSHOTS_PATH).mkdir(parents=True, exist_ok=True)
 
+# Default LLM provider: use google/Vertex AI if enabled, otherwise fall back to openai
+_default_provider = "google" if USE_VERTEXAI else "openai"
+_default_model = "gemini-2.0-flash" if USE_VERTEXAI else "gpt-4o"
+
 task_manager = TaskManager(tasks_dir=TASKS_DIR)
 explorer = Explorer(
-    llm_provider=os.getenv("BROWGENE_LLM_PROVIDER", "openai"),
-    llm_model=os.getenv("BROWGENE_LLM_MODEL", "gpt-4o"),
+    llm_provider=os.getenv("BROWGENE_LLM_PROVIDER", _default_provider),
+    llm_model=os.getenv("BROWGENE_LLM_MODEL", _default_model),
     headless=HEADLESS,
+    use_vertexai=USE_VERTEXAI,
+    vertexai_project=VERTEXAI_PROJECT,
+    vertexai_location=VERTEXAI_LOCATION,
 )
 learner = Learner()
 
@@ -711,7 +737,7 @@ async def _run_v2_task(task_id: str, req: V2CreateTaskRequest):
 
     try:
         max_steps = req.maxSteps or 25
-        # v2 tasks always run headless — the live screenshot feed provides the visual
+        # v2 tasks always run headless — the live video stream provides the visual
         agent_explorer = Explorer(
             llm_provider=explorer.llm_provider,
             llm_model=explorer.llm_model,
@@ -719,6 +745,9 @@ async def _run_v2_task(task_id: str, req: V2CreateTaskRequest):
             headless=True,
             recordings_path=RECORDINGS_PATH if req.enableRecording else None,
             snapshots_path=SNAPSHOTS_PATH,
+            use_vertexai=explorer.use_vertexai,
+            vertexai_project=explorer.vertexai_project,
+            vertexai_location=explorer.vertexai_location,
         )
 
         # Register explorer for live screenshot access
