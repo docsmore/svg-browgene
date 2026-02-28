@@ -140,6 +140,8 @@ class Explorer:
         self.recordings_path = recordings_path
         self.snapshots_path = snapshots_path
         self._explorations: Dict[str, ExplorationResult] = {}
+        # Active browser sessions keyed by exploration_id for live screenshot capture
+        self._active_sessions: Dict[str, Any] = {}
 
     async def explore(
         self,
@@ -196,6 +198,9 @@ class Explorer:
             browser_profile = BrowserProfile(**profile_kwargs)
             browser_session = BrowserSession(browser_profile=browser_profile)
 
+            # Store active session for live screenshot capture
+            self._active_sessions[exp_id] = browser_session
+
             # Embed start_url in task text so browser-use's built-in
             # directly_open_url mechanism navigates there automatically.
             # This is the most reliable approach in browser-use 0.12.
@@ -239,6 +244,8 @@ class Explorer:
                 await browser_session.stop()
             except Exception as stop_err:
                 logger.debug(f"Browser stop error (non-fatal): {stop_err}")
+            finally:
+                self._active_sessions.pop(exp_id, None)
 
             # Locate video recording file
             if self.recordings_path:
@@ -248,14 +255,55 @@ class Explorer:
             logger.warning(f"browser-use not installed or import error: {ie}. Install with: pip install browser-use")
             result.error = f"browser-use import error: {ie}"
             result.status = "failed"
+            self._active_sessions.pop(exp_id, None)
         except Exception as e:
             logger.error(f"Exploration failed: {e}")
             result.error = str(e)
             result.status = "failed"
+            self._active_sessions.pop(exp_id, None)
 
         result.end_time = time.strftime("%Y-%m-%d %H:%M:%S")
         logger.info(f"═══ EXPLORE [{exp_id}] done: {len(result.recorded_actions)} actions recorded ═══")
         return result
+
+    async def get_live_screenshot(self, exploration_id: str) -> Optional[bytes]:
+        """Capture a live screenshot from the active browser session.
+
+        Returns PNG bytes if a page is open, or None.
+        """
+        session = self._active_sessions.get(exploration_id)
+        if not session:
+            logger.debug(f"No active session for exploration {exploration_id}")
+            return None
+
+        try:
+            # Preferred: BrowserSession.take_screenshot() returns bytes directly
+            # Use JPEG for faster streaming (smaller frames)
+            if hasattr(session, 'take_screenshot'):
+                screenshot_bytes = await session.take_screenshot(format="jpeg", quality=70)
+                if screenshot_bytes:
+                    return screenshot_bytes
+
+            # Fallback: get_current_page() -> Playwright Page -> screenshot()
+            if hasattr(session, 'get_current_page'):
+                page = await session.get_current_page()
+                if page:
+                    screenshot_bytes = await page.screenshot(type="png")
+                    return screenshot_bytes
+
+            # Fallback 2: get_pages() -> last page -> screenshot()
+            if hasattr(session, 'get_pages'):
+                pages = await session.get_pages()
+                if pages:
+                    screenshot_bytes = await pages[-1].screenshot(type="png")
+                    return screenshot_bytes
+
+            logger.debug(f"No active page found for exploration {exploration_id}")
+            return None
+
+        except Exception as e:
+            logger.debug(f"Could not capture live screenshot for {exploration_id}: {e}")
+            return None
 
     def get_exploration(self, exploration_id: str) -> Optional[ExplorationResult]:
         """Retrieve a completed exploration by ID."""

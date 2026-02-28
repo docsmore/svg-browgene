@@ -15,9 +15,9 @@ load_dotenv()
 
 import uuid
 from pathlib import Path
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from browgene.core.task import BrowserStep, BrowserTask, TaskExecution
@@ -654,6 +654,8 @@ async def serve_snapshot(filename: str):
 
 # v2 task storage: task_id -> {status, output, steps, exploration, ...}
 _v2_tasks: Dict[str, Dict[str, Any]] = {}
+# Active explorer instances for v2 tasks (for live screenshot capture)
+_v2_active_explorers: Dict[str, Explorer] = {}
 
 
 class V2CreateTaskRequest(BaseModel):
@@ -709,16 +711,20 @@ async def _run_v2_task(task_id: str, req: V2CreateTaskRequest):
 
     try:
         max_steps = req.maxSteps or 25
+        # v2 tasks always run headless — the live screenshot feed provides the visual
         agent_explorer = Explorer(
             llm_provider=explorer.llm_provider,
             llm_model=explorer.llm_model,
             max_steps=max_steps,
-            headless=HEADLESS,
+            headless=True,
             recordings_path=RECORDINGS_PATH if req.enableRecording else None,
             snapshots_path=SNAPSHOTS_PATH,
         )
 
-        logger.info(f"v2 task [{task_id}] exploring: {req.task[:80]} (max {max_steps} steps, recording={req.enableRecording})")
+        # Register explorer for live screenshot access
+        _v2_active_explorers[task_id] = agent_explorer
+
+        logger.info(f"v2 task [{task_id}] exploring (headless): {req.task[:80]} (max {max_steps} steps, recording={req.enableRecording})")
 
         result = await agent_explorer.explore(
             task=req.task,
@@ -748,6 +754,8 @@ async def _run_v2_task(task_id: str, req: V2CreateTaskRequest):
         logger.error(f"v2 task [{task_id}] failed: {e}")
         task_state["status"] = "failed"
         task_state["output"] = str(e)
+    finally:
+        _v2_active_explorers.pop(task_id, None)
 
 
 @app.get("/api/v2/tasks/{task_id}")
@@ -802,18 +810,214 @@ async def v2_get_task_files(task_id: str):
     return []
 
 
+@app.get("/api/v2/tasks/{task_id}/live-screenshot")
+async def v2_live_screenshot(task_id: str):
+    """Capture a live screenshot from the active browser session for this task.
+    Returns PNG image bytes, or 204 if no active session."""
+    if task_id not in _v2_tasks:
+        raise HTTPException(404, f"Task '{task_id}' not found")
+
+    task_state = _v2_tasks[task_id]
+    exp_id = task_state.get("exploration_id")
+
+    if not exp_id:
+        return Response(status_code=204)
+
+    # Try to get live screenshot from the explorer that owns this session
+    # Check all explorers that might have an active session for this exploration
+    for exp_instance in [explorer] + list(_v2_active_explorers.values()):
+        screenshot_bytes = await exp_instance.get_live_screenshot(exp_id)
+        if screenshot_bytes:
+            return Response(
+                content=screenshot_bytes,
+                media_type="image/png",
+                headers={
+                    "Cache-Control": "no-cache, no-store, must-revalidate",
+                    "Pragma": "no-cache",
+                    "Expires": "0",
+                }
+            )
+
+    return Response(status_code=204)
+
+
 @app.get("/api/v2/sessions/{session_id}")
-async def v2_get_session(session_id: str):
+async def v2_get_session(session_id: str, request: Request):
     """Get session details (v2 compatible). Returns liveUrl for the session."""
     # Find the task that owns this session
     for task_state in _v2_tasks.values():
         if task_state.get("sessionId") == session_id:
+            # Build liveUrl - use the request's origin so it works through
+            # Next.js proxy (rewrite /api/v2/* -> BrowGene) or directly
+            host = request.headers.get("host", "localhost:8200")
+            scheme = request.headers.get("x-forwarded-proto", "http")
+            live_url = f"{scheme}://{host}/api/v2/sessions/{session_id}/live"
             return {
                 "id": session_id,
-                "liveUrl": "",  # No live URL for local headful execution
+                "liveUrl": live_url,
                 "status": "active" if task_state["status"] == "running" else "closed",
             }
     raise HTTPException(404, f"Session '{session_id}' not found")
+
+
+@app.websocket("/api/v2/sessions/{session_id}/ws")
+async def v2_session_ws_stream(websocket: WebSocket, session_id: str):
+    """WebSocket endpoint that streams live JPEG screenshots as binary frames."""
+    # Find task for this session
+    task_id = None
+    for tid, task_state in _v2_tasks.items():
+        if task_state.get("sessionId") == session_id:
+            task_id = tid
+            break
+    if not task_id:
+        await websocket.close(code=4004, reason="Session not found")
+        return
+
+    await websocket.accept()
+    frame_count = 0
+    logger.info(f"WS video stream started for session {session_id} (task {task_id})")
+
+    try:
+        # Initial wait for browser to start
+        await asyncio.sleep(2)
+
+        while True:
+            task_state = _v2_tasks.get(task_id, {})
+            exp_id = task_state.get("exploration_id")
+
+            if task_state.get("status") not in ("running", "pending"):
+                await websocket.send_json({"type": "done", "status": task_state.get("status", "finished"), "frames": frame_count})
+                logger.info(f"WS stream ended for session {session_id}: {task_state.get('status')} ({frame_count} frames)")
+                break
+
+            if exp_id:
+                exp_instance = _v2_active_explorers.get(task_id)
+                if exp_instance:
+                    screenshot_bytes = await exp_instance.get_live_screenshot(exp_id)
+                    if screenshot_bytes:
+                        await websocket.send_bytes(screenshot_bytes)
+                        frame_count += 1
+
+            await asyncio.sleep(0.3)  # ~3fps
+
+    except WebSocketDisconnect:
+        logger.info(f"WS client disconnected for session {session_id} ({frame_count} frames sent)")
+    except Exception as e:
+        logger.error(f"WS stream error for session {session_id}: {e}")
+    finally:
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+
+
+@app.get("/api/v2/sessions/{session_id}/live")
+async def v2_session_live_viewer(session_id: str, request: Request):
+    """Self-contained HTML page with WebSocket video stream.
+    This URL is returned as liveUrl and works in an iframe just like browser-use Cloud."""
+    found = any(ts.get("sessionId") == session_id for ts in _v2_tasks.values())
+    if not found:
+        raise HTTPException(404, f"Session '{session_id}' not found")
+
+    # Build the WebSocket URL from the request origin
+    host = request.headers.get("host", "localhost:8200")
+    ws_scheme = "wss" if request.headers.get("x-forwarded-proto") == "https" else "ws"
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>BrowGene Live Session</title>
+<style>
+  * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+  body {{ background: #0a0a1a; display: flex; align-items: center; justify-content: center; height: 100vh; overflow: hidden; font-family: system-ui, sans-serif; }}
+  #screen {{ max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 4px; display: none; }}
+  #loader {{ color: #94a3b8; text-align: center; }}
+  #loader .spinner {{ width: 32px; height: 32px; border: 3px solid #334155; border-top-color: #3b82f6; border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto 12px; }}
+  @keyframes spin {{ to {{ transform: rotate(360deg); }} }}
+  #status {{ position: fixed; top: 8px; left: 8px; color: #fff; font-size: 11px; background: rgba(59,130,246,0.85); padding: 4px 10px; border-radius: 6px; display: flex; align-items: center; gap: 6px; backdrop-filter: blur(4px); z-index: 10; }}
+  #status .dot {{ width: 6px; height: 6px; border-radius: 50%; background: #4ade80; animation: pulse 1.5s infinite; }}
+  @keyframes pulse {{ 0%,100% {{ opacity: 1; }} 50% {{ opacity: 0.3; }} }}
+  .done {{ background: rgba(100,100,100,0.85) !important; }}
+  .done .dot {{ animation: none; background: #888; }}
+</style>
+</head>
+<body>
+  <div id="status"><div class="dot"></div><span>Connecting…</span></div>
+  <div id="loader"><div class="spinner"></div><div>Starting browser…</div></div>
+  <img id="screen" alt="Live browser view">
+  <script>
+    const img = document.getElementById('screen');
+    const loader = document.getElementById('loader');
+    const status = document.getElementById('status');
+    const statusText = status.querySelector('span');
+    let frameCount = 0;
+    let fps = 0;
+    let lastFpsTime = Date.now();
+    let fpsFrames = 0;
+
+    function connect() {{
+      const ws = new WebSocket('{ws_scheme}://{host}/api/v2/sessions/{session_id}/ws');
+      ws.binaryType = 'arraybuffer';
+
+      ws.onopen = () => {{
+        statusText.textContent = 'Connected — waiting for frames…';
+      }};
+
+      ws.onmessage = (e) => {{
+        if (typeof e.data === 'string') {{
+          // JSON control message
+          try {{
+            const msg = JSON.parse(e.data);
+            if (msg.type === 'done') {{
+              statusText.textContent = 'Session ended · ' + msg.status + ' · ' + msg.frames + ' frames';
+              status.classList.add('done');
+            }}
+          }} catch(ex) {{}}
+          return;
+        }}
+
+        // Binary frame (JPEG bytes)
+        const blob = new Blob([e.data], {{ type: 'image/jpeg' }});
+        const url = URL.createObjectURL(blob);
+        const prev = img.src;
+        img.src = url;
+        if (prev && prev.startsWith('blob:')) URL.revokeObjectURL(prev);
+
+        if (loader.style.display !== 'none') {{
+          loader.style.display = 'none';
+          img.style.display = 'block';
+        }}
+
+        frameCount++;
+        fpsFrames++;
+        const now = Date.now();
+        if (now - lastFpsTime >= 1000) {{
+          fps = fpsFrames;
+          fpsFrames = 0;
+          lastFpsTime = now;
+        }}
+        statusText.textContent = 'Live · ' + frameCount + ' frames · ' + fps + ' fps';
+      }};
+
+      ws.onclose = (e) => {{
+        if (!status.classList.contains('done')) {{
+          statusText.textContent = 'Disconnected — reconnecting…';
+          setTimeout(connect, 2000);
+        }}
+      }};
+
+      ws.onerror = () => {{
+        statusText.textContent = 'Connection error…';
+      }};
+    }}
+
+    connect();
+  </script>
+</body>
+</html>"""
+    return HTMLResponse(content=html)
 
 
 # ── Startup/Shutdown ───────────────────────────────────────────────────
