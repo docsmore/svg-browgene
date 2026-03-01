@@ -10,7 +10,8 @@ from langchain_mistralai import ChatMistralAI
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_ollama import ChatOllama
 from langchain_openai import AzureChatOpenAI, ChatOpenAI
-import gradio as gr
+# Lazy import: gradio is only needed for webui helpers, not the API server
+# import gradio as gr  — imported on demand inside functions that need it
 
 from .llm import DeepSeekR1ChatOpenAI, DeepSeekR1ChatOllama
 
@@ -179,6 +180,7 @@ def update_model_dropdown(llm_provider, api_key=None, base_url=None):
     """
     Update the model name dropdown with predefined models for the selected provider.
     """
+    import gradio as gr
     # Use API keys from .env if not provided
     if not api_key:
         api_key = os.getenv(f"{llm_provider.upper()}_API_KEY", "")
@@ -196,10 +198,13 @@ def handle_api_key_error(provider: str, env_var: str):
     Handles the missing API key error by raising a gr.Error with a clear message.
     """
     provider_display = PROVIDER_DISPLAY_NAMES.get(provider, provider.upper())
-    raise gr.Error(
-        f"💥 {provider_display} API key not found! 🔑 Please set the "
-        f"`{env_var}` environment variable or provide it in the UI."
-    )
+    msg = (f"💥 {provider_display} API key not found! 🔑 Please set the "
+           f"`{env_var}` environment variable or provide it in the UI.")
+    try:
+        import gradio as gr
+        raise gr.Error(msg)
+    except ImportError:
+        raise ValueError(msg)
 
 def encode_image(img_path):
     if not img_path:
