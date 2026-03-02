@@ -27,7 +27,7 @@ from playwright.async_api import async_playwright
 BROWGENE_AI_AVAILABLE = False
 try:
     from langchain_openai import ChatOpenAI
-    from browser_use import Agent
+    from browser_use import Agent, Browser, BrowserConfig
     from src.agent.custom_agent import CustomAgent
     from src.browser.custom_browser import CustomBrowser
     from src.utils.utils import capture_screenshot
