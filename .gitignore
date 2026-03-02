@@ -192,7 +192,7 @@ data/
 
 # BrowGene recordings & snapshots (runtime artifacts)
 recordings/
-executions/
+/executions/
 
 # Frontend (Next.js)
 frontend/node_modules/
