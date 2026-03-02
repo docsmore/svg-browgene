@@ -215,8 +215,8 @@ class Explorer:
                 browser=browser,
             )
 
-            # Run the agent
-            agent_result = await agent.run()
+            # Run the agent (max_steps is a run() param in v0.1.37)
+            agent_result = await agent.run(max_steps=self.max_steps)
 
             # Extract recorded actions and v2-compatible step data from agent history
             if hasattr(agent_result, 'history') and agent_result.history:
