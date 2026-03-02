@@ -178,10 +178,9 @@ class Explorer:
         self._explorations[exp_id] = result
 
         try:
-            # Try to import browser-use (v0.12+ API)
+            # Import browser-use (v0.1.x API — Browser/BrowserConfig)
             from browser_use import Agent
-            from browser_use.browser.profile import BrowserProfile
-            from browser_use.browser.session import BrowserSession
+            from browser_use.browser.browser import Browser, BrowserConfig
 
             llm = self._create_llm()
             if not llm:
@@ -189,24 +188,17 @@ class Explorer:
                 result.status = "failed"
                 return result
 
-            # Configure browser session with disable_security for SSL issues
-            profile_kwargs: Dict[str, Any] = {
+            # Configure browser with disable_security for SSL issues
+            config_kwargs: Dict[str, Any] = {
                 "headless": self.headless,
                 "disable_security": True,
             }
 
-            # Enable video recording if recordings_path is set
-            if self.recordings_path:
-                rec_dir = Path(self.recordings_path)
-                rec_dir.mkdir(parents=True, exist_ok=True)
-                profile_kwargs["record_video_dir"] = str(rec_dir)
-                logger.info(f"Video recording enabled → {rec_dir}")
+            browser_config = BrowserConfig(**config_kwargs)
+            browser = Browser(config=browser_config)
 
-            browser_profile = BrowserProfile(**profile_kwargs)
-            browser_session = BrowserSession(browser_profile=browser_profile)
-
-            # Store active session for live screenshot capture
-            self._active_sessions[exp_id] = browser_session
+            # Store active browser for live screenshot capture
+            self._active_sessions[exp_id] = browser
 
             # Embed start_url in task text so browser-use's built-in
             # directly_open_url mechanism navigates there automatically.
@@ -220,7 +212,7 @@ class Explorer:
             agent = Agent(
                 task=full_task,
                 llm=llm,
-                browser=browser_session,
+                browser=browser,
                 max_steps=self.max_steps,
             )
 
@@ -246,11 +238,11 @@ class Explorer:
             if self.snapshots_path and hasattr(agent_result, 'history') and agent_result.history:
                 self._save_step_screenshots(result, agent_result.history, exp_id)
 
-            # Stop browser session
+            # Close browser
             try:
-                await browser_session.stop()
+                await browser.close()
             except Exception as stop_err:
-                logger.debug(f"Browser stop error (non-fatal): {stop_err}")
+                logger.debug(f"Browser close error (non-fatal): {stop_err}")
             finally:
                 self._active_sessions.pop(exp_id, None)
 
@@ -330,25 +322,25 @@ class Explorer:
         ]
 
     def _create_llm(self) -> Any:
-        """Create the LLM client for browser-use (using browser-use's native models)."""
+        """Create the LLM client for browser-use (using langchain chat models)."""
         try:
             if self.llm_provider == "openai":
-                from browser_use.llm.models import ChatOpenAI
+                from langchain_openai import ChatOpenAI
                 return ChatOpenAI(model=self.llm_model)
             elif self.llm_provider == "anthropic":
-                from browser_use.llm.models import ChatBrowserUse
-                return ChatBrowserUse(model=self.llm_model)
+                from langchain_anthropic import ChatAnthropic
+                return ChatAnthropic(model_name=self.llm_model)
             elif self.llm_provider == "google":
-                from browser_use.llm.models import ChatGoogle
+                from langchain_google_genai import ChatGoogleGenerativeAI
                 kwargs: Dict[str, Any] = {"model": self.llm_model}
                 if self.use_vertexai:
-                    kwargs["vertexai"] = True
+                    kwargs["google_api_key"] = None  # use default credentials
                     if self.vertexai_project:
                         kwargs["project"] = self.vertexai_project
                     if self.vertexai_location:
                         kwargs["location"] = self.vertexai_location
-                    logger.info(f"Creating ChatGoogle with Vertex AI: project={self.vertexai_project}, location={self.vertexai_location}, model={self.llm_model}")
-                return ChatGoogle(**kwargs)
+                    logger.info(f"Creating ChatGoogleGenerativeAI with Vertex AI: project={self.vertexai_project}, location={self.vertexai_location}, model={self.llm_model}")
+                return ChatGoogleGenerativeAI(**kwargs)
             else:
                 logger.error(f"Unknown LLM provider: {self.llm_provider}")
                 return None
