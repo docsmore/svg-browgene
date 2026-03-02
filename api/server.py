@@ -737,6 +737,10 @@ async def _run_v2_task(task_id: str, req: V2CreateTaskRequest):
 
     try:
         max_steps = req.maxSteps or 25
+        # Extract viewport dimensions from request metadata (sent by PulseGene BrowGene node)
+        meta = req.metadata or {}
+        viewport_w = int(meta.get("window_w", 1920))
+        viewport_h = int(meta.get("window_h", 1080))
         # v2 tasks always run headless — the live video stream provides the visual
         agent_explorer = Explorer(
             llm_provider=explorer.llm_provider,
@@ -748,6 +752,8 @@ async def _run_v2_task(task_id: str, req: V2CreateTaskRequest):
             use_vertexai=explorer.use_vertexai,
             vertexai_project=explorer.vertexai_project,
             vertexai_location=explorer.vertexai_location,
+            viewport_width=viewport_w,
+            viewport_height=viewport_h,
         )
 
         # Register explorer for live screenshot access

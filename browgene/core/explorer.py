@@ -136,6 +136,9 @@ class Explorer:
         use_vertexai: bool = False,
         vertexai_project: Optional[str] = None,
         vertexai_location: str = "us-central1",
+        # Viewport size for screenshots
+        viewport_width: int = 1920,
+        viewport_height: int = 1080,
     ):
         self.llm_provider = llm_provider
         self.llm_model = llm_model
@@ -146,6 +149,8 @@ class Explorer:
         self.use_vertexai = use_vertexai
         self.vertexai_project = vertexai_project
         self.vertexai_location = vertexai_location
+        self.viewport_width = viewport_width
+        self.viewport_height = viewport_height
         self._explorations: Dict[str, ExplorationResult] = {}
         # Active browser sessions keyed by exploration_id for live screenshot capture
         self._active_sessions: Dict[str, Any] = {}
@@ -188,13 +193,17 @@ class Explorer:
                 result.status = "failed"
                 return result
 
-            # Configure browser with disable_security for SSL issues
-            config_kwargs: Dict[str, Any] = {
+            # Configure browser session with disable_security for SSL issues
+            from browser_use.browser.profile import ViewportSize
+            profile_kwargs: Dict[str, Any] = {
                 "headless": self.headless,
                 "disable_security": True,
+                "viewport": ViewportSize(width=self.viewport_width, height=self.viewport_height),
             }
+            if not self.headless:
+                profile_kwargs["window_size"] = ViewportSize(width=self.viewport_width, height=self.viewport_height)
 
-            browser_config = BrowserConfig(**config_kwargs)
+            browser_config = BrowserConfig(**profile_kwargs)
             browser = Browser(config=browser_config)
 
             # Store active browser for live screenshot capture
