@@ -330,16 +330,24 @@ class Explorer:
                 from langchain_anthropic import ChatAnthropic
                 return ChatAnthropic(model_name=self.llm_model)
             elif self.llm_provider == "google":
-                from langchain_google_genai import ChatGoogleGenerativeAI
-                kwargs: Dict[str, Any] = {"model": self.llm_model}
                 if self.use_vertexai:
-                    kwargs["google_api_key"] = None  # use default credentials
-                    if self.vertexai_project:
-                        kwargs["project"] = self.vertexai_project
-                    if self.vertexai_location:
-                        kwargs["location"] = self.vertexai_location
-                    logger.info(f"Creating ChatGoogleGenerativeAI with Vertex AI: project={self.vertexai_project}, location={self.vertexai_location}, model={self.llm_model}")
-                return ChatGoogleGenerativeAI(**kwargs)
+                    # Vertex AI requires langchain_google_vertexai
+                    try:
+                        from langchain_google_vertexai import ChatVertexAI
+                        kwargs: Dict[str, Any] = {"model_name": self.llm_model}
+                        if self.vertexai_project:
+                            kwargs["project"] = self.vertexai_project
+                        if self.vertexai_location:
+                            kwargs["location"] = self.vertexai_location
+                        logger.info(f"Creating ChatVertexAI: project={self.vertexai_project}, location={self.vertexai_location}, model={self.llm_model}")
+                        return ChatVertexAI(**kwargs)
+                    except ImportError:
+                        logger.warning("langchain_google_vertexai not installed, falling back to OpenAI")
+                        from langchain_openai import ChatOpenAI
+                        return ChatOpenAI(model="gpt-4o")
+                else:
+                    from langchain_google_genai import ChatGoogleGenerativeAI
+                    return ChatGoogleGenerativeAI(model=self.llm_model)
             else:
                 logger.error(f"Unknown LLM provider: {self.llm_provider}")
                 return None
