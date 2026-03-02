@@ -208,12 +208,11 @@ class Explorer:
                 full_task = f"Go to {start_url} — then: {task}"
                 logger.info(f"Task with URL: {full_task}")
 
-            # Create agent
+            # Create agent (v0.1.37 doesn't support max_steps)
             agent = Agent(
                 task=full_task,
                 llm=llm,
                 browser=browser,
-                max_steps=self.max_steps,
             )
 
             # Run the agent
