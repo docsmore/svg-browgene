@@ -15,7 +15,6 @@ jobs:
     permissions:
       actions: read
       contents: read
-      security-events: write
 
     strategy:
       fail-fast: false
@@ -39,3 +38,13 @@ jobs:
         uses: github/codeql-action/analyze@v3
         with:
           category: "/language:${{ matrix.language }}"
+          upload: "never"
+          output: "/tmp/codeql-results"
+
+      - name: Upload SARIF results as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: codeql-${{ matrix.language }}-results
+          path: /tmp/codeql-results/
+          if-no-files-found: ignore
+          retention-days: 90
